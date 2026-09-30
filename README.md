@@ -75,15 +75,11 @@ The dashboard includes a **Failed Attempts by IP** visualization and a
 
 The screenshots folder contains the available project evidence:
 
--   `01_setup.png` --- Splunk setup/running evidence
--   `02_command.png` --- SPL detection query
--   `04_alert.png` --- Splunk alert evidence
--   `05_dashboard.png` --- dashboard evidence
-
-`03_output.png` was not captured because the Splunk service was
-unavailable after a system restart near the submission deadline. The
-detection results are nevertheless represented in the dashboard
-evidence.
+- `01.png` — Splunk setup and running status
+- `02.png` — SPL detection query and failed-login detection results
+- `03.png` — Splunk alert evidence
+- `04.png` — Splunk dashboard showing failed attempts by IP
+- `05.png` — Raw SSH authentication events ingested into Splunk
 
 ## Security Significance
 
