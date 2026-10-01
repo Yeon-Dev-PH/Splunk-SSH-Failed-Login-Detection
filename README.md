@@ -1,41 +1,187 @@
 # Splunk SSH Failed Login Detection
 
+A small SIEM lab that uses **Splunk Enterprise** on **Kali Linux** to detect repeated failed SSH logins, raise an alert, and show the results on a dashboard.
+
+**Workflow:** Log Ingestion → Detection → Alerting → Visualization
+
+---
+
+## Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [Tools and Technologies](#tools-and-technologies)
+3. [Step-by-Step Guide](#step-by-step-guide)
+4. [Detection Results](#detection-results)
+5. [MITRE ATT&CK Mapping](#mitre-attck-mapping)
+6. [Evidence](#evidence)
+7. [Security Significance](#security-significance)
+8. [Limitations](#limitations)
+9. [Skills Demonstrated](#skills-demonstrated)
+10. [Conclusion](#conclusion)
+
+---
+
 ## Project Overview
 
-This project demonstrates a small Security Information and Event Management (SIEM) lab using Splunk Enterprise on Kali Linux.
+Repeated failed SSH logins can be a sign of password guessing or brute-force activity. This project shows how a SIEM can catch that pattern.
 
-The project focuses on detecting repeated failed SSH authentication attempts by analyzing Linux authentication logs. Splunk is used to ingest authentication events, identify source IP addresses with more than five failed login attempts, generate an alert, and visualize the results through a dashboard.
+Splunk ingests Linux SSH authentication events, finds source IPs with **more than 5 failed logins**, creates an alert, and shows the top offenders on a dashboard.
 
-## Objectives
+**Objectives**
 
-- Set up and run Splunk Enterprise on Kali Linux.
-- Ingest Linux SSH authentication log events.
-- Use Splunk Search Processing Language (SPL) to detect repeated failed SSH logins.
-- Extract source IP addresses from authentication events.
-- Identify IP addresses with more than five failed login attempts.
-- Create a Splunk alert for suspicious SSH authentication activity.
-- Create a dashboard to visualize failed login activity.
-- Document the detection process and results.
+- Set up and run Splunk Enterprise on Kali Linux
+- Ingest SSH authentication log events
+- Write an SPL query to detect repeated failed logins
+- Extract source IP addresses from the events
+- Create an alert for suspicious SSH activity
+- Build a dashboard of failed login activity
+- Document the process and results
+
+---
 
 ## Tools and Technologies
 
-- Kali Linux
-- Splunk Enterprise 10.4.4
-- Splunk Search Processing Language (SPL)
-- Linux SSH authentication logs
-- Synthetic/mock authentication data
+| Tool | Purpose |
+|------|---------|
+| Kali Linux (VirtualBox) | Lab machine |
+| Splunk Enterprise 10.4.4 | SIEM platform |
+| Splunk SPL | Search and detection language |
+| Synthetic `auth.log` | Mock SSH authentication data |
 
-## Detection Scenario
+> **Note:** All IP addresses are synthetic private lab addresses. They are not real attackers.
 
-The lab simulates repeated failed SSH login attempts from multiple source IP addresses.
+---
 
-The detection rule considers an IP address suspicious when it generates more than five failed SSH authentication attempts within the searched dataset.
+## Step-by-Step Guide
 
-> **Note:** The IP addresses used in this project are synthetic/private lab addresses and do not represent real-world attackers.
+Run every command in the Kali terminal unless the step says Splunk Web.
 
-## SPL Detection Query
+### Step 1: Update Kali
 
-The following SPL query searches for failed SSH password authentication events, extracts the source IP address, counts failed attempts by IP, and displays IPs exceeding the threshold.
+**Why:** Starts the lab from a clean, up-to-date system.
+
+```bash
+sudo apt update
+```
+
+### Step 2: Download Splunk Enterprise
+
+**Why:** Gets the installer file (`.deb`) for Kali.
+
+1. Open the download page in the Kali browser: https://www.splunk.com/en_us/download/splunk-enterprise.html
+2. Sign in (a free Splunk account is needed).
+3. Choose **Linux** and download the **.deb** package.
+
+Check that the file is in Downloads:
+
+```bash
+cd ~/Downloads
+ls splunk-*.deb
+```
+
+### Step 3: Install Splunk
+
+**Why:** Installs Splunk into `/opt/splunk`.
+
+```bash
+sudo dpkg -i splunk-*-linux-amd64.deb
+```
+
+### Step 4: Start Splunk and create the admin account
+
+**Why:** Starts the service. The first start asks you to accept the license and create an admin login.
+
+```bash
+sudo /opt/splunk/bin/splunk start --accept-license
+```
+
+Type an admin username and password when asked. Remember them.
+
+### Step 5: Check that Splunk is running
+
+**Why:** Confirms the service is up before using it.
+
+```bash
+sudo /opt/splunk/bin/splunk status
+```
+
+Expected: `splunkd is running`.
+
+Open Splunk Web in the browser and log in:
+
+```
+http://127.0.0.1:8000
+```
+
+> Screenshot: `01.png` (Splunk setup and running status)
+
+### Step 6: Create the mock SSH log
+
+**Why:** Makes fake failed-login events so the detection has data to find.
+
+```bash
+mkdir -p ~/splunk-lab && cd ~/splunk-lab
+rm -f auth.log
+
+gen_failed() {
+  for i in $(seq 1 "$2"); do
+    printf 'Oct  1 10:%02d:%02d kali sshd[%d]: Failed password for root from %s port %d ssh2\n' \
+      "$3" "$i" $((2000 + RANDOM % 900)) "$1" $((40000 + RANDOM % 20000))
+  done
+}
+
+gen_failed 10.10.10.25 18 10 >> auth.log
+gen_failed 10.10.10.31 11 20 >> auth.log
+gen_failed 10.10.10.44 7 30 >> auth.log
+gen_failed 10.10.10.60 3 40 >> auth.log
+echo 'Oct  1 10:50:05 kali sshd[3100]: Accepted password for admin from 10.10.10.5 port 51234 ssh2' >> auth.log
+```
+
+### Step 7: Check the mock log
+
+**Why:** Confirms the numbers before ingesting. `10.10.10.60` has only 3 failures, so it should not be flagged.
+
+```bash
+wc -l auth.log
+grep "Failed password" auth.log | grep -o "from [0-9.]*" | sort | uniq -c | sort -rn
+```
+
+Expected:
+
+```
+     18 from 10.10.10.25
+     11 from 10.10.10.31
+      7 from 10.10.10.44
+      3 from 10.10.10.60
+```
+
+### Step 8: Ingest the log into Splunk
+
+**Why:** Loads the events into the `main` index so Splunk can search them.
+
+```bash
+sudo /opt/splunk/bin/splunk add oneshot ~/splunk-lab/auth.log -index main -sourcetype linux_secure
+```
+
+Enter your Splunk admin username and password when asked.
+
+### Step 9: View the raw events
+
+**Why:** Proves the data arrived in Splunk.
+
+In Splunk Web, open **Search & Reporting**, set the time range to **All time**, and run:
+
+```spl
+index=main sourcetype=linux_secure
+```
+
+Expected: 40 events.
+
+> Screenshot: `05.png` (raw SSH authentication events)
+
+### Step 10: Run the detection query
+
+**Why:** Finds IPs with more than 5 failed logins.
 
 ```spl
 index=main "Failed password"
@@ -45,117 +191,149 @@ index=main "Failed password"
 | sort - failed_attempts
 ```
 
-### Detection Logic
+**What each line does**
 
-1. Search the `main` index for events containing `Failed password`.
-2. Extract the source IP address from each authentication event.
-3. Count failed authentication attempts for each source IP.
-4. Filter results to IPs with more than five failed attempts.
-5. Sort the results from the highest number of failed attempts to the lowest.
+| Line | Purpose |
+|------|---------|
+| `index=main "Failed password"` | Finds failed SSH login events |
+| `rex ...` | Pulls out the source IP address |
+| `stats count ... by src_ip` | Counts failures per IP |
+| `where failed_attempts > 5` | Keeps only IPs over the threshold |
+| `sort - failed_attempts` | Shows the highest count first |
+
+Expected: 3 rows (see [Detection Results](#detection-results)).
+
+> Screenshot: `02.png` (SPL query and results)
+
+### Step 11: Create the alert
+
+**Why:** Gets Splunk to notify you when the pattern appears.
+
+With the detection query results on screen, click **Save As → Alert** and fill in:
+
+| Setting | Value |
+|---------|-------|
+| Title | `SSH Brute Force Detection` |
+| Alert type | Scheduled |
+| Run every | Hour |
+| Time range | All time (the lab data is fixed, so this keeps it visible) |
+| Trigger alert when | Number of Results is greater than `0` |
+| Trigger | Once |
+| Trigger actions | Add to Triggered Alerts |
+
+Click **Save**.
+
+> Screenshot: `03.png` (alert evidence)
+
+### Step 12: Build the dashboard
+
+**Why:** Shows the top attacking IPs at a glance.
+
+**Panel 1: Top Attacking IPs (table)**
+
+1. Run the detection query from Step 10 again.
+2. Click **Save As → Dashboard Panel**.
+3. Choose **New** and name the dashboard `SSH Authentication Threat Monitor`.
+4. Pick **Classic Dashboards**.
+5. Set the panel title to `Top Attacking IPs`, then click **Save to Dashboard**.
+
+**Panel 2: Failed Attempts by IP (bar chart)**
+
+1. Run the detection query again.
+2. Open the **Visualization** tab and choose **Bar Chart**.
+3. Click **Save As → Dashboard Panel**.
+4. Choose **Existing** and select `SSH Authentication Threat Monitor`.
+5. Set the panel title to `Failed Attempts by IP`, then click **Save to Dashboard**.
+
+Open the dashboard from **Dashboards** to check both panels.
+
+> Screenshot: `04.png` (dashboard)
+
+### Step 13: Save the evidence
+
+**Why:** Keeps proof of each stage in the repo.
+
+```bash
+mkdir -p ~/splunk-lab/screenshots
+cp ~/splunk-lab/auth.log ~/splunk-lab/sample-auth.log
+ls ~/splunk-lab
+```
+
+Place `01.png` to `05.png` in the `screenshots` folder.
+
+---
 
 ## Detection Results
 
-The SPL detection identified the following source IP addresses exceeding the configured threshold:
-
 | Source IP | Failed Attempts |
-|-----------|----------------:|
+|-----------|-----------------|
 | 10.10.10.25 | 18 |
 | 10.10.10.31 | 11 |
 | 10.10.10.44 | 7 |
 
-These addresses are private/synthetic addresses used for the controlled lab environment.
+`10.10.10.60` (3 failures) stays below the threshold and is not flagged.
 
-## Alert
+---
 
-A Splunk alert named:
+## MITRE ATT&CK Mapping
 
-**SSH Brute Force Detection**
+| Field | Value |
+|-------|-------|
+| Tactic | Credential Access |
+| Technique | T1110 Brute Force |
+| Sub-technique | T1110.001 Password Guessing |
 
-was created using the failed SSH login detection logic.
+The detection looks for many failed password attempts from one source, which is the behavior this technique describes.
 
-The alert provides a notification signal when the configured failed-login condition is triggered.
-
-The alert evidence is shown in `03.png`.
-
-## Dashboard
-
-A Splunk dashboard named:
-
-**SSH Authentication Threat Monitor**
-
-was created to visualize the detection results.
-
-The dashboard contains:
-
-- **Top Attacking IPs** table
-- **Failed Attempts by IP** bar chart
-
-The dashboard provides a quick overview of which source IPs generated the highest number of failed SSH authentication attempts.
+---
 
 ## Evidence
 
-The `screenshots` folder contains the project evidence:
+| File | What it shows |
+|------|---------------|
+| `screenshots/01.png` | Splunk setup and running status |
+| `screenshots/02.png` | SPL detection query and results |
+| `screenshots/03.png` | Splunk alert |
+| `screenshots/04.png` | Dashboard |
+| `screenshots/05.png` | Raw SSH events in Splunk |
 
-- `01.png` — Splunk setup and running status
-- `02.png` — SPL detection query and detection results
-- `03.png` — Splunk alert evidence
-- `04.png` — Splunk dashboard
-- `05.png` — Raw SSH authentication events ingested into Splunk
+---
 
 ## Security Significance
 
-Repeated failed SSH authentication attempts can be associated with password guessing, brute-force activity, or other unauthorized access attempts.
+Repeated failed SSH logins can point to password guessing, brute-force activity, or other unauthorized access attempts.
 
-A SIEM such as Splunk can help security analysts identify these patterns by collecting authentication logs, applying detection rules, generating alerts, and presenting the results through dashboards.
+A SIEM like Splunk helps analysts spot this by collecting logs, applying detection rules, raising alerts, and showing results on dashboards.
 
-The detection in this project is intended as an initial security signal and does not by itself prove that an attack or system compromise has occurred.
+This detection is an early warning signal. It does not prove an attack or compromise on its own.
 
-## Project Workflow
-
-```text
-SSH Authentication Logs
-          │
-          ▼
-     Splunk Ingestion
-          │
-          ▼
-      SPL Detection
-          │
-          ▼
- Extract Source IP
-          │
-          ▼
- Count Failed Attempts
-          │
-          ▼
- Threshold > 5 Attempts
-          │
-     ┌────┴────┐
-     ▼         ▼
-   Alert    Dashboard
-```
+---
 
 ## Limitations
 
-This project is a controlled proof-of-concept using synthetic authentication data.
+This is a proof of concept with synthetic data. The threshold of 5 is a demo value, not a universal rule.
 
-The threshold of more than five failed attempts is a demonstration rule and should not be treated as a universal indicator of malicious activity.
-
-A production detection environment would require additional tuning, including:
+A real environment would also need:
 
 - Time-based detection windows
-- Allowlisting of legitimate administrative systems
+- Allowlisting of legitimate admin systems
 - Account and authentication context
-- Source reputation
-- False-positive analysis
-- Correlation with successful logins and other security events
+- Source IP reputation
+- False-positive tuning
+- Correlation with successful logins and other events
+
+---
+
+## Skills Demonstrated
+
+- SIEM setup and log ingestion (Splunk)
+- SPL queries: `rex`, `stats`, `where`, `sort`
+- Alert creation and dashboard building
+- Mapping detections to MITRE ATT&CK
+- Security documentation
+
+---
 
 ## Conclusion
 
-This project demonstrates a basic SIEM workflow using Splunk Enterprise:
-
-**Log Ingestion → Detection → Alerting → Visualization**
-
-The lab successfully identified repeated failed SSH authentication attempts, extracted the source IP addresses, counted failed attempts, generated an alert, and displayed the results through a Splunk dashboard.
-
-The project provides a practical example of how SIEM tools can be used for basic security monitoring and detection of suspicious authentication activity.
+This lab walks through a basic SIEM workflow in Splunk Enterprise: **ingest logs, detect, alert, and visualize**. It found repeated failed SSH logins, counted them per source IP, raised an alert, and displayed the results on a dashboard.
